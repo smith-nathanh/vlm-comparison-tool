@@ -1,0 +1,12 @@
+[project]
+name = "vlm-comparison-tool"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gradio>=5.38.2",
+    "pillow>=11.3.0",
+    "pymupdf>=1.26.3",
+    "requests>=2.32.4",
+]
