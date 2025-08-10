@@ -7,7 +7,25 @@ from typing import Dict, List, Tuple
 import fitz  # PyMuPDF
 import gradio as gr
 import requests
+from dotenv import load_dotenv
 from PIL import Image
+
+# Load environment variables
+load_dotenv()
+
+# Import our custom retrieval system
+try:
+    from retrieval import MultimodalRetriever, create_retriever
+
+    RETRIEVAL_AVAILABLE = True
+except ImportError:
+    RETRIEVAL_AVAILABLE = False
+    print(
+        "Warning: Retrieval system not available - multimodal retrieval will be disabled"
+    )
+
+# Global retriever instance
+current_retriever = None
 
 # OpenRouter configuration
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -101,8 +119,6 @@ def extract_model_info(model: Dict) -> Dict:
 def filter_models(
     models: List[Dict],
     search_term: str = "",
-    min_context: int = 0,
-    max_prompt_price: float = 1000.0,
     selected_providers: List[str] = None,
 ) -> List[Dict]:
     """Filter models based on search criteria"""
@@ -121,14 +137,6 @@ def filter_models(
                 or search_lower in model_info["provider"].lower()
             ):
                 continue
-
-        # Context length filter
-        if model_info["context_length"] < min_context:
-            continue
-
-        # Prompt price filter
-        if model_info["prompt_price"] > max_prompt_price:
-            continue
 
         # Provider filter
         if selected_providers and model_info["provider"] not in selected_providers:
@@ -263,7 +271,7 @@ def query_openrouter_model(model_id: str, question: str, img_base64: str) -> str
                     error_msg += (
                         f": {error_data['error'].get('message', 'Unknown error')}"
                     )
-            except:
+            except Exception:
                 error_msg += f": {response.text[:200]}"
             return f"Error: {error_msg}"
 
@@ -275,8 +283,12 @@ def query_openrouter_model(model_id: str, question: str, img_base64: str) -> str
         return "Error: Invalid JSON response"
 
 
-def compare_models(pdf_file, page_num, question, model_a_id, model_b_id):
-    """Main function to compare both models"""
+def compare_models(
+    pdf_file, page_num, question, model_a_id, model_b_id, use_retrieval=True
+):
+    """Main function to compare both models - supports both retrieval and manual page selection"""
+    global current_retriever
+
     if not pdf_file:
         error_msg = "Please upload a PDF file"
         return error_msg, error_msg, error_msg, True  # Show status on error
@@ -289,13 +301,34 @@ def compare_models(pdf_file, page_num, question, model_a_id, model_b_id):
         error_msg = "Please select both models"
         return error_msg, error_msg, error_msg, True  # Show status on error
 
-    # Convert PDF page to base64
-    img_base64, pil_image, error = pdf_page_to_base64(pdf_file, page_num)
-
-    if error:
-        return error, error, error, True  # Show status on error
-
     try:
+        # Determine if we should use retrieval or manual page selection
+        use_retrieval_mode = use_retrieval and current_retriever is not None
+
+        if use_retrieval_mode:
+            # Use multimodal retrieval to find relevant pages
+            relevant_pages = retrieve_relevant_pages(question, k=3)
+
+            if not relevant_pages:
+                # Fall back to manual page selection
+                img_base64, pil_image, error = pdf_page_to_base64(pdf_file, page_num)
+                if error:
+                    return error, error, error, True
+                status_msg = f"No relevant pages found via retrieval. Using page {page_num} instead."
+            else:
+                # Use the most relevant page (first result)
+                img_bytes, score = relevant_pages[0]
+                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+                status_msg = f"Using most relevant page (similarity: {score:.3f})"
+
+        else:
+            # Use manual page selection
+            img_base64, pil_image, error = pdf_page_to_base64(pdf_file, page_num)
+            if error:
+                return error, error, error, True
+            status_msg = f"Using manually selected page {page_num}"
+
+        # Query both models
         response_a = query_openrouter_model(model_a_id, question, img_base64)
         response_b = query_openrouter_model(model_b_id, question, img_base64)
 
@@ -304,8 +337,8 @@ def compare_models(pdf_file, page_num, question, model_a_id, model_b_id):
             status_msg = "One or more models returned an error"
             return response_a, response_b, status_msg, True  # Show status on error
 
-        # Success - hide status
-        return response_a, response_b, "", False  # Hide status on success
+        # Success - show status with page info
+        return response_a, response_b, status_msg, True  # Show status for page info
 
     except Exception as e:
         error_msg = f"Error during comparison: {str(e)}"
@@ -381,6 +414,154 @@ def get_pdf_info_and_preview(pdf_file):
         return f"Error reading PDF: {str(e)}", None
 
 
+def initialize_retrieval_model(model_name, progress=gr.Progress()):
+    """Initialize the multimodal retrieval model"""
+    global current_retriever
+
+    if not RETRIEVAL_AVAILABLE:
+        return "Error: Retrieval system not available", True
+
+    if not model_name or model_name == "None":
+        current_retriever = None
+        return "No retrieval model selected - manual page selection required", False
+
+    try:
+        progress(0.1, desc="Creating retriever...")
+        current_retriever = create_retriever(model_name)
+
+        if not current_retriever:
+            return f"Error: Unsupported model {model_name}", True
+
+        progress(0.3, desc="Initializing model...")
+
+        def progress_callback(message, status):
+            if status == "downloading":
+                progress(0.5, desc=message)
+            elif status == "ready":
+                progress(0.8, desc=message)
+            elif status == "error":
+                progress(1.0, desc=f"Error: {message}")
+
+        success = current_retriever.initialize_model(progress_callback)
+
+        if success:
+            progress(1.0, desc="Model ready for indexing!")
+            return (
+                "Model initialized successfully. Upload a PDF to start indexing.",
+                False,
+            )
+        else:
+            current_retriever = None
+            return "Error initializing model", True
+
+    except Exception as e:
+        current_retriever = None
+        return f"Error: {str(e)}", True
+
+
+def process_pdf_for_retrieval(pdf_file, progress=gr.Progress()):
+    """Process PDF with multimodal retrieval"""
+    global current_retriever
+
+    if not current_retriever:
+        return get_pdf_info_and_preview(pdf_file)  # Fall back to regular preview
+
+    if not pdf_file:
+        return "No PDF uploaded", None
+
+    try:
+        progress(0.1, desc="Starting PDF indexing...")
+
+        # Get PDF data
+        if hasattr(pdf_file, "read"):
+            pdf_data = pdf_file.read()
+        else:
+            pdf_data = pdf_file
+
+        def progress_callback(message, status):
+            if status == "indexing":
+                progress(0.3, desc=message)
+            elif status == "complete":
+                progress(1.0, desc=message)
+            elif status == "error":
+                progress(1.0, desc=f"Error: {message}")
+
+        # Index the PDF
+        success = current_retriever.index_pdf(pdf_data, progress_callback)
+
+        if success:
+            # Get basic PDF info
+            pdf_document = fitz.open(stream=pdf_data, filetype="pdf")
+            num_pages = len(pdf_document)
+
+            # Get status for timing info
+            status = current_retriever.get_status()
+            timing = status.get("timing", {})
+            gpu_usage = status.get("gpu_usage", {})
+
+            timing_info = f"Indexing completed in {timing.get('indexing_time', 0):.2f}s"
+            if gpu_usage.get("total_mb", 0) > 0:
+                timing_info += f" (GPU: {gpu_usage['used_mb']:.0f}MB/{gpu_usage['total_mb']:.0f}MB)"
+
+            info_text = f"PDF indexed successfully. Pages: {num_pages}. {timing_info}"
+
+            # Show first page as preview
+            if num_pages > 0:
+                page = pdf_document.load_page(0)
+                mat = fitz.Matrix(1.5, 1.5)
+                pix = page.get_pixmap(matrix=mat)
+                img_data = pix.tobytes("png")
+                pil_image = Image.open(io.BytesIO(img_data))
+            else:
+                pil_image = None
+
+            pdf_document.close()
+            return info_text, pil_image
+        else:
+            return "Error indexing PDF", None
+
+    except Exception as e:
+        return f"Error processing PDF: {str(e)}", None
+
+
+def process_pdf_with_status(pdf_file):
+    """Process PDF and return HTML formatted status"""
+    if not pdf_file:
+        return "<i>No PDF uploaded</i>", None
+
+    # Get filename from uploaded file
+    filename = (
+        getattr(pdf_file, "name", "uploaded.pdf")
+        if hasattr(pdf_file, "name")
+        else "uploaded.pdf"
+    )
+
+    # Process the PDF (this will also handle the indexing if retrieval model is available)
+    info_text, preview_image = process_pdf_for_retrieval(pdf_file)
+
+    # Format as HTML with filename and status
+    if "Error" in info_text:
+        html_status = f"<span style='color: red;'>📄 {filename} - {info_text}</span>"
+    else:
+        html_status = f"<span style='color: green;'>📄 {filename} - {info_text}</span>"
+
+    return html_status, preview_image
+
+
+def retrieve_relevant_pages(query, k=3):
+    """Retrieve relevant pages using multimodal search"""
+    global current_retriever
+
+    if not current_retriever or not query.strip():
+        return []
+
+    try:
+        return current_retriever.search(query, k=k)
+    except Exception as e:
+        print(f"Error during retrieval: {e}")
+        return []
+
+
 # Initialize models list
 print("Fetching available VLM models from OpenRouter...")
 raw_models = get_available_models()
@@ -403,10 +584,48 @@ else:
         f"Found {len(all_model_info)} vision-capable models from {len(all_providers)} providers"
     )
 
-# Custom CSS for better text margins in response areas only
+# Custom CSS for better layout and compact upload
 custom_css = """
 .gr-group .prose {
     padding: 12px !important;
+}
+.compact-upload {
+    max-width: 200px !important;
+}
+.compact-upload .upload-container {
+    min-height: 40px !important;
+    padding: 8px !important;
+}
+/* Hide the file drop area completely - target all possible elements */
+.compact-upload .file-drop-area,
+.compact-upload .gr-file-upload-area,
+.compact-upload .upload-drop-zone,
+.compact-upload .drop-zone,
+.compact-upload .file-upload-drop,
+.compact-upload .gr-file .file-drop {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+}
+/* Hide drag and drop text and icons */
+.compact-upload .drag-text,
+.compact-upload .or-text,
+.compact-upload .upload-icon,
+.compact-upload .file-upload-text {
+    display: none !important;
+}
+/* Show only the upload button */
+.compact-upload .upload-button,
+.compact-upload .gr-button,
+.compact-upload button {
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 8px 16px !important;
+}
+/* Override any background styling */
+.compact-upload {
+    background: transparent !important;
+    border: none !important;
 }
 """
 
@@ -419,122 +638,125 @@ with gr.Blocks(
         "Select any VLM available on OpenRouter, upload a PDF, and compare responses."
     )
 
-    with gr.Tabs():
-        with gr.TabItem("Model Selection"):
+    with gr.Row():
+        with gr.Column(scale=1):
+            # Multimodal Retrieval Model Section
+            gr.Markdown("## 🔍 Multimodal Retrieval Model")
+            retrieval_model_dropdown = gr.Dropdown(
+                choices=["None"]
+                + (MultimodalRetriever.SUPPORTED_MODELS if RETRIEVAL_AVAILABLE else []),
+                label="Choose multimodal retrieval model",
+                value="None",
+                interactive=True,
+                info="Select a model for intelligent page retrieval, or 'None' for manual page selection",
+            )
+
+            retrieval_status = gr.Textbox(
+                label="Retrieval Status",
+                value="No retrieval model selected",
+                interactive=False,
+                visible=False,
+            )
+
+            # Response Generation Models Section
+            gr.Markdown("## 🤖 Response Generation Models")
+
             with gr.Row():
                 with gr.Column(scale=1):
                     provider_checkboxes = gr.CheckboxGroup(
                         choices=all_providers,
-                        label="Providers (leave empty for all)",
+                        label="Providers (leave empty to see all)",
                         value=[],
                         interactive=True,
                     )
 
-                    with gr.Row():
-                        context_slider = gr.Slider(
-                            minimum=0,
-                            maximum=200,
-                            step=32,
-                            value=0,
-                            label="Min Context Length (K tokens)",
-                            scale=1,
-                        )
-                        price_slider = gr.Slider(
-                            minimum=0,
-                            maximum=50,
-                            step=1,
-                            value=50,
-                            label="Max Prompt Price ($/1M tokens)",
-                            scale=1,
-                        )
-                        refresh_models_btn = gr.Button("🔄 Refresh", size="sm", scale=1)
-
                     # Model count display
                     model_count_display = gr.Textbox(
-                        label="Filtered Results",
-                        value=f"Showing {len(initial_choices)} models",
+                        value=f"Showing {len(initial_choices)} of {len(all_model_info)} models",
                         interactive=False,
+                        show_label=False,
+                        container=False,
                     )
 
-                    with gr.Row():
-                        model_a_dropdown = gr.Dropdown(
-                            choices=initial_choices,
-                            label="Model A",
-                            value=initial_choices[0][1]
-                            if initial_choices and initial_choices[0][1]
-                            else None,
-                            interactive=True,
-                            filterable=True,
-                        )
-                        model_b_dropdown = gr.Dropdown(
-                            choices=initial_choices,
-                            label="Model B",
-                            value=initial_choices[1][1]
-                            if len(initial_choices) > 1 and initial_choices[1][1]
-                            else None,
-                            interactive=True,
-                            filterable=True,
-                        )
-
-        with gr.TabItem("Comparison"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("### 🎯 Selected Models")
-                    model_a_display = gr.Textbox(
-                        label="Model A", interactive=False, value="No model selected"
-                    )
-                    model_b_display = gr.Textbox(
-                        label="Model B", interactive=False, value="No model selected"
-                    )
-
-                    gr.Markdown("### 📄 PDF Upload")
-                    pdf_input = gr.File(
-                        label="Upload PDF", file_types=[".pdf"], type="binary"
-                    )
-                    pdf_info = gr.Textbox(
-                        label="PDF Info", interactive=False, value="No PDF uploaded"
-                    )
-
-                    gr.Markdown("### 📖 PDF Preview")
-                    pdf_display = gr.Image(
-                        label="Browse to find the page you want to ask about",
-                        type="pil",
-                        height=300,
-                    )
-
-                    page_input = gr.Number(
-                        label="📃 Page Number", value=1, minimum=1, step=1
-                    )
-
-                    question_input = gr.Textbox(
-                        label="❓ Question",
-                        placeholder="Ask a question about this PDF page...",
-                        lines=3,
-                    )
-
-                    compare_btn = gr.Button(
-                        "⚡ Compare Models", variant="primary", size="lg"
+                    refresh_models_btn = gr.Button(
+                        "🔄 Refresh Models", variant="secondary"
                     )
 
                 with gr.Column(scale=1):
-                    gr.Markdown("### 🤖 Model A Response")
-                    with gr.Group():
-                        response_a = gr.Markdown(
-                            value="Model A response will appear here...", height=400
-                        )
-
-                    gr.Markdown("### 🤖 Model B Response")
-                    with gr.Group():
-                        response_b = gr.Markdown(
-                            value="Model B response will appear here...", height=400
-                        )
-
-                    # Status display only for errors
-                    status_display = gr.Textbox(
-                        label="Status",
-                        interactive=False,
-                        visible=False,  # Hidden by default
+                    model_a_dropdown = gr.Dropdown(
+                        choices=initial_choices,
+                        label="Model A",
+                        value=initial_choices[0][1]
+                        if initial_choices and initial_choices[0][1]
+                        else None,
+                        interactive=True,
+                        filterable=True,
                     )
+                    model_b_dropdown = gr.Dropdown(
+                        choices=initial_choices,
+                        label="Model B",
+                        value=initial_choices[1][1]
+                        if len(initial_choices) > 1 and initial_choices[1][1]
+                        else None,
+                        interactive=True,
+                        filterable=True,
+                    )
+
+            # PDF Upload and Processing Section
+            gr.Markdown("## 📄 PDF Upload & Processing")
+            pdf_input = gr.File(
+                label="📄 Upload PDF",
+                file_types=[".pdf"],
+                type="binary",
+                elem_classes=["compact-upload"],
+            )
+
+            # Filename display (will be updated with actual filename when uploaded)
+            pdf_status = gr.HTML(value="<i>No PDF uploaded</i>")
+
+            gr.Markdown("###  Manual Page Selection (Optional)")
+            gr.Markdown("*Only required when no retrieval model is selected*")
+            page_input = gr.Number(
+                label="Page Number (fallback)",
+                value=1,
+                minimum=1,
+                step=1,
+                info="Used as fallback when retrieval finds no relevant pages",
+            )
+
+            question_input = gr.Textbox(
+                label="❓ Question",
+                placeholder="Ask a question about this PDF...",
+                lines=3,
+            )
+
+            compare_btn = gr.Button("⚡ Compare Models", variant="primary", size="lg")
+
+        with gr.Column(scale=1):
+            # PDF Preview Section - Now gets full right column
+            gr.Markdown("## 📖 PDF Preview")
+            pdf_display = gr.Image(
+                label="PDF Preview - Retrieval mode will find relevant pages automatically",
+                type="pil",
+                height=600,  # Increased height to use more space
+            )
+
+    # Results Section
+    gr.Markdown("## 📊 Comparison Results")
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("### 🤖 Model A Response")
+            with gr.Group():
+                response_a = gr.Markdown(
+                    value="Model A response will appear here...", height=400
+                )
+
+        with gr.Column(scale=1):
+            gr.Markdown("### 🤖 Model B Response")
+            with gr.Group():
+                response_b = gr.Markdown(
+                    value="Model B response will appear here...", height=400
+                )
 
     # Helper function to refresh models
     def refresh_models():
@@ -565,14 +787,10 @@ with gr.Blocks(
         )
 
     # Helper function to apply filters
-    def apply_filters(min_context_k, max_price, selected_providers):
-        min_context_tokens = min_context_k * 1000  # Convert K to actual tokens
-
+    def apply_filters(selected_providers):
         filtered_models = filter_models(
             all_model_info,
             search_term="",  # No search term anymore
-            min_context=min_context_tokens,
-            max_prompt_price=max_price,
             selected_providers=selected_providers if selected_providers else [],
         )
 
@@ -598,25 +816,24 @@ with gr.Blocks(
                 return model_info["name"]
         return model_id.split("/")[-1]  # fallback to last part of ID
 
-    # Function to update model display labels
-    def update_model_displays(model_a_id, model_b_id):
-        model_a_name = get_model_name(model_a_id) if model_a_id else "No model selected"
-        model_b_name = get_model_name(model_b_id) if model_b_id else "No model selected"
-        return model_a_name, model_b_name
-
-    # Wrapper function to handle status visibility
+    # Wrapper function to handle comparison
     def compare_with_status_visibility(
         pdf_file, page_num, question, model_a_id, model_b_id
     ):
+        # Determine if we should use retrieval based on current_retriever state
+        use_retrieval = current_retriever is not None
+
         response_a, response_b, status_msg, show_status = compare_models(
-            pdf_file, page_num, question, model_a_id, model_b_id
+            pdf_file, page_num, question, model_a_id, model_b_id, use_retrieval
         )
 
-        return (response_a, response_b, status_msg, gr.update(visible=show_status))
+        return (response_a, response_b)
 
     # Event handlers
     pdf_input.change(
-        fn=get_pdf_info_and_preview, inputs=[pdf_input], outputs=[pdf_info, pdf_display]
+        fn=process_pdf_with_status,
+        inputs=[pdf_input],
+        outputs=[pdf_status, pdf_display],
     )
 
     # PDF page preview when page number changes
@@ -634,36 +851,21 @@ with gr.Blocks(
         ],
     )
 
-    # Real-time filtering events
-    context_slider.change(
-        fn=apply_filters,
-        inputs=[context_slider, price_slider, provider_checkboxes],
-        outputs=[model_a_dropdown, model_b_dropdown, model_count_display],
+    # Retrieval model initialization
+    retrieval_model_dropdown.change(
+        fn=initialize_retrieval_model,
+        inputs=[retrieval_model_dropdown],
+        outputs=[
+            retrieval_status,
+            retrieval_status,
+        ],  # Second output controls visibility
     )
 
-    price_slider.change(
-        fn=apply_filters,
-        inputs=[context_slider, price_slider, provider_checkboxes],
-        outputs=[model_a_dropdown, model_b_dropdown, model_count_display],
-    )
-
+    # Real-time filtering events (simplified - only provider filter now)
     provider_checkboxes.change(
         fn=apply_filters,
-        inputs=[context_slider, price_slider, provider_checkboxes],
+        inputs=[provider_checkboxes],
         outputs=[model_a_dropdown, model_b_dropdown, model_count_display],
-    )
-
-    # Update model displays when selections change
-    model_a_dropdown.change(
-        fn=update_model_displays,
-        inputs=[model_a_dropdown, model_b_dropdown],
-        outputs=[model_a_display, model_b_display],
-    )
-
-    model_b_dropdown.change(
-        fn=update_model_displays,
-        inputs=[model_a_dropdown, model_b_dropdown],
-        outputs=[model_a_display, model_b_display],
     )
 
     compare_btn.click(
@@ -675,7 +877,7 @@ with gr.Blocks(
             model_a_dropdown,
             model_b_dropdown,
         ],
-        outputs=[response_a, response_b, status_display, status_display],
+        outputs=[response_a, response_b],
     )
 
     # Allow Enter key to trigger comparison
@@ -688,7 +890,7 @@ with gr.Blocks(
             model_a_dropdown,
             model_b_dropdown,
         ],
-        outputs=[response_a, response_b, status_display, status_display],
+        outputs=[response_a, response_b],
     )
 
 if __name__ == "__main__":
