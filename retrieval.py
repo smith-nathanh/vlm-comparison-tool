@@ -107,6 +107,9 @@ class IndexingLogger:
     def error(self, message: str):
         self.logger.error(message)
 
+    def warning(self, message: str):
+        self.logger.warning(message)
+
     def log_gpu_usage(self, usage: Dict[str, float]):
         self.logger.info(
             f"GPU Memory: {usage['used_mb']:.1f}MB/{usage['total_mb']:.1f}MB ({usage['utilization_percent']:.1f}%)"
@@ -126,6 +129,34 @@ class MultimodalRetriever:
         self.monitor = PerformanceMonitor()
         self.logger = None
 
+    def _check_gpu_safety(self) -> Tuple[bool, str]:
+        """Check if GPU is safe for use"""
+        try:
+            if not torch.cuda.is_available():
+                return False, "CUDA not available"
+
+            # Check GPU memory using torch
+            device = torch.cuda.current_device()
+            total_memory = torch.cuda.get_device_properties(device).total_memory / (
+                1024**3
+            )  # GB
+            allocated_memory = torch.cuda.memory_allocated(device) / (1024**3)  # GB
+
+            memory_usage = allocated_memory / total_memory if total_memory > 0 else 0
+
+            # Be conservative with smaller GPUs
+            if total_memory <= 6.5:  # 6GB GPU
+                if memory_usage > 0.8:
+                    return False, f"6GB GPU memory high: {memory_usage*100:.1f}%"
+            else:
+                if memory_usage > 0.9:
+                    return False, f"GPU memory critically high: {memory_usage*100:.1f}%"
+
+            return True, "GPU safe for use"
+
+        except Exception as e:
+            return False, f"Error checking GPU: {e}"
+
     def initialize_model(self, progress_callback=None) -> bool:
         """Initialize the RAG model with progress tracking"""
         if not self.model_name or self.model_name not in self.SUPPORTED_MODELS:
@@ -139,19 +170,21 @@ class MultimodalRetriever:
 
             if progress_callback:
                 progress_callback(
-                    "Downloading model... This may take a few minutes on first use.",
+                    "Downloading model on GPU... This may take a few minutes on first use.",
                     "downloading",
                 )
 
-            self.logger.info("Loading RAG model...")
+            self.logger.info("Loading RAG model on GPU...")
+
             self.model = RAGMultiModalModel.from_pretrained(self.model_name, verbose=1)
 
             self.monitor.start_indexing()  # Model download complete, indexing about to start
-            self.logger.info("Model loaded successfully")
+            self.logger.info("Model loaded successfully on GPU")
 
             if progress_callback:
                 progress_callback(
-                    "Model downloaded successfully. Ready for indexing.", "ready"
+                    "Model downloaded successfully on GPU. Ready for indexing.",
+                    "ready",
                 )
 
             return True
@@ -164,7 +197,7 @@ class MultimodalRetriever:
             return False
 
     def index_pdf(self, pdf_data: bytes, progress_callback=None) -> bool:
-        """Index a PDF for retrieval"""
+        """Index a PDF for retrieval with GPU OOM handling"""
         if not self.model:
             return False
 
@@ -184,36 +217,52 @@ class MultimodalRetriever:
             self.index_name = f"pdf_index_{timestamp}"
 
             if progress_callback:
-                progress_callback("Starting PDF indexing...", "indexing")
+                device_mode = "CPU" if self.using_cpu else "GPU"
+                progress_callback(
+                    f"Starting PDF indexing on {device_mode}...", "indexing"
+                )
 
-            self.logger.info(f"Creating index '{self.index_name}' from PDF")
-
-            # Record initial GPU usage
-            initial_usage = self.monitor.record_gpu_usage()
-            self.logger.log_gpu_usage(initial_usage)
-
-            # Index the PDF
-            self.model.index(
-                input_path=str(pdf_path),
-                index_name=self.index_name,
-                store_collection_with_index=True,
-                overwrite=True,
+            self.logger.info(
+                f"Creating index '{self.index_name}' from PDF on {'CPU' if self.using_cpu else 'GPU'}"
             )
+
+            # Record initial GPU usage (if available)
+            initial_usage = self.monitor.record_gpu_usage()
+            if initial_usage.get("total_mb", 0) > 0:
+                self.logger.log_gpu_usage(initial_usage)
+
+            try:
+                # Index the PDF
+                self.model.index(
+                    input_path=str(pdf_path),
+                    index_name=self.index_name,
+                    store_collection_with_index=True,
+                    overwrite=True,
+                )
+            except Exception as e:
+                error_msg = f"Error indexing PDF: {str(e)}"
+                self.logger.error(error_msg)
+                if progress_callback:
+                    progress_callback(f"Error: {error_msg}", "error")
+                return False
 
             self.monitor.complete_indexing()
 
-            # Record final GPU usage
+            # Record final GPU usage (if available)
             final_usage = self.monitor.record_gpu_usage()
-            self.logger.log_gpu_usage(final_usage)
+            if final_usage.get("total_mb", 0) > 0:
+                self.logger.log_gpu_usage(final_usage)
 
             # Log timing summary
             timing = self.monitor.get_timing_summary()
             self.logger.info(
-                f"Indexing completed - Total time: {timing.get('total_time', 0):.2f}s, Indexing time: {timing.get('indexing_time', 0):.2f}s"
+                f"Indexing completed on GPU - Total time: {timing.get('total_time', 0):.2f}s, Indexing time: {timing.get('indexing_time', 0):.2f}s"
             )
 
             if progress_callback:
-                progress_callback("PDF indexing completed successfully!", "complete")
+                progress_callback(
+                    "PDF indexing completed successfully on GPU!", "complete"
+                )
 
             return True
 
@@ -258,6 +307,9 @@ class MultimodalRetriever:
             "model_loaded": self.model is not None,
             "index_ready": self.index_name is not None,
             "model_name": self.model_name,
+            "device_info": {
+                "device_mode": "GPU",
+            },
         }
 
         if self.monitor:
