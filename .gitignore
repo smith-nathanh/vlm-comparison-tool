@@ -1,2 +1,5 @@
 logs/
 .env
+
+byaldi/
+__pycache__/*

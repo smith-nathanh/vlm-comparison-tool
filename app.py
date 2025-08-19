@@ -31,187 +31,28 @@ logger = logging.getLogger(__name__)
 # Try to import GPU monitoring
 try:
     import GPUtil
-    import psutil
 
     GPU_MONITORING_AVAILABLE = True
-    logger.info("GPU and system monitoring available")
+    logger.info("GPU monitoring available")
 except ImportError:
     GPU_MONITORING_AVAILABLE = False
-    logger.info(
-        "GPU monitoring not available - install GPUtil and psutil for detailed system metrics"
-    )
+    logger.info("GPU monitoring not available")
 
 
-def log_system_stats():
-    """Log current system and GPU statistics"""
+def check_high_gpu_usage():
+    """Check GPU usage and warn if it nears 90%"""
     if not GPU_MONITORING_AVAILABLE:
         return
 
     try:
-        # CPU and Memory stats
-        cpu_percent = psutil.cpu_percent(interval=1)
-        memory = psutil.virtual_memory()
-        logger.info(
-            f"System Stats - CPU: {cpu_percent}%, Memory: {memory.percent}% ({memory.used/1024/1024/1024:.1f}GB used / {memory.total/1024/1024/1024:.1f}GB total)"
-        )
-
-        # GPU stats
         gpus = GPUtil.getGPUs()
         for i, gpu in enumerate(gpus):
-            logger.info(
-                f"GPU {i} ({gpu.name}) - Utilization: {gpu.load*100:.1f}%, Memory: {gpu.memoryUtil*100:.1f}% ({gpu.memoryUsed}MB / {gpu.memoryTotal}MB), Temp: {gpu.temperature}°C"
-            )
-    except Exception as e:
-        logger.warning(f"Failed to collect system stats: {e}")
-
-
-def check_gpu_safety() -> Tuple[bool, str]:
-    """Check if GPU is safe for use and detect OOM conditions"""
-    if not GPU_MONITORING_AVAILABLE:
-        return False, "GPU monitoring not available"
-
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return False, "CUDA not available"
-
-        gpus = GPUtil.getGPUs()
-        if not gpus:
-            return False, "No GPUs detected"
-
-        # Check primary GPU
-        gpu = gpus[0]
-        memory_total_gb = gpu.memoryTotal / 1024
-
-        # Check for critical memory usage that could lead to OOM
-        if gpu.memoryUtil > 0.9:
-            return (
-                False,
-                f"GPU memory critically high: {gpu.memoryUtil*100:.1f}% - OOM risk",
-            )
-
-        # Special handling for 6GB GPUs - be more conservative
-        if memory_total_gb <= 6.5:
-            if gpu.memoryUtil > 0.8:
-                return (
-                    False,
-                    f"6GB GPU memory high: {gpu.memoryUtil*100:.1f}% - OOM risk on smaller GPU",
+            if gpu.memoryUtil >= 0.9:
+                logger.warning(
+                    f"GPU {i} ({gpu.name}) memory usage high: {gpu.memoryUtil*100:.1f}%"
                 )
-
-        return True, "GPU safe for use"
-
     except Exception as e:
-        return False, f"Error checking GPU safety: {e}"
-
-
-def force_cpu_mode():
-    """Force PyTorch to use CPU mode"""
-    try:
-        # Set CUDA_VISIBLE_DEVICES to empty to hide GPUs from PyTorch
-        import os
-
-        import torch
-
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-        # Also set torch to explicitly use CPU
-        if hasattr(torch, "set_default_tensor_type"):
-            torch.set_default_tensor_type(torch.FloatTensor)
-
-        logger.info("🔄 FORCED CPU MODE: GPU disabled for processing")
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to force CPU mode: {e}")
-        return False
-
-
-def log_detailed_gpu_stats(operation_name="operation"):
-    """Log detailed GPU statistics for a specific operation"""
-    if not GPU_MONITORING_AVAILABLE:
-        logger.info(f"{operation_name} - GPU monitoring not available")
-        return
-
-    try:
-        import torch
-
-        logger.info(f"--- {operation_name.upper()} GPU DETAILS ---")
-
-        # PyTorch CUDA info
-        if torch.cuda.is_available():
-            logger.info("CUDA Available: True")
-            logger.info(f"CUDA Device Count: {torch.cuda.device_count()}")
-            current_device = torch.cuda.current_device()
-            logger.info(f"Current CUDA Device: {current_device}")
-
-            # Memory stats for current device
-            allocated = torch.cuda.memory_allocated(current_device) / 1024**3  # GB
-            reserved = torch.cuda.memory_reserved(current_device) / 1024**3  # GB
-            max_allocated = (
-                torch.cuda.max_memory_allocated(current_device) / 1024**3
-            )  # GB
-
-            logger.info(
-                f"PyTorch GPU Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB, Max Allocated: {max_allocated:.2f}GB"
-            )
-
-            # Device properties
-            props = torch.cuda.get_device_properties(current_device)
-            logger.info(
-                f"GPU Device: {props.name}, Total Memory: {props.total_memory / 1024**3:.2f}GB"
-            )
-        else:
-            logger.info("CUDA Not Available - Running on CPU")
-
-        # GPUtil stats
-        gpus = GPUtil.getGPUs()
-        for i, gpu in enumerate(gpus):
-            memory_used_gb = gpu.memoryUsed / 1024
-            memory_total_gb = gpu.memoryTotal / 1024
-            memory_free_gb = memory_total_gb - memory_used_gb
-
-            logger.info(f"GPUtil GPU {i} ({gpu.name}):")
-            logger.info(f"  - Utilization: {gpu.load*100:.1f}%")
-            logger.info(
-                f"  - Memory: {memory_used_gb:.2f}GB / {memory_total_gb:.2f}GB ({gpu.memoryUtil*100:.1f}%) - Free: {memory_free_gb:.2f}GB"
-            )
-            logger.info(f"  - Temperature: {gpu.temperature}°C")
-
-            # Check for OOM risk with 6GB GPU
-            if memory_total_gb <= 6.5:  # Account for some system overhead
-                logger.info(f"*** DETECTED 6GB GPU: {gpu.name} ***")
-                if gpu.memoryUtil > 0.9:
-                    logger.warning(
-                        f"🚨 CRITICAL: GPU {i} memory usage is {gpu.memoryUtil*100:.1f}% - OOM RISK!"
-                    )
-                elif gpu.memoryUtil > 0.8:
-                    logger.warning(
-                        f"⚠️  HIGH: GPU {i} memory usage is {gpu.memoryUtil*100:.1f}% - Monitor closely"
-                    )
-                elif gpu.memoryUtil > 0.6:
-                    logger.info(
-                        f"📊 MODERATE: GPU {i} memory usage is {gpu.memoryUtil*100:.1f}%"
-                    )
-                else:
-                    logger.info(
-                        f"✅ SAFE: GPU {i} memory usage is {gpu.memoryUtil*100:.1f}%"
-                    )
-            else:
-                # Warn if memory usage is high on larger GPUs
-                if gpu.memoryUtil > 0.9:
-                    logger.warning(
-                        f"GPU {i} memory usage is critically high: {gpu.memoryUtil*100:.1f}%"
-                    )
-                elif gpu.memoryUtil > 0.8:
-                    logger.warning(
-                        f"GPU {i} memory usage is high: {gpu.memoryUtil*100:.1f}%"
-                    )
-
-        logger.info(f"--- END {operation_name.upper()} GPU DETAILS ---")
-
-    except Exception as e:
-        logger.error(f"Failed to collect detailed GPU stats for {operation_name}: {e}")
+        logger.debug(f"Failed to check GPU usage: {e}")
 
 
 # Load environment variables
@@ -232,6 +73,15 @@ except ImportError:
 
 # Global retriever instance
 current_retriever = None
+
+# Indexing state tracking
+indexing_state = {
+    "status": "not_started",  # not_started, in_progress, success, failed
+    "last_error": None,
+    "last_attempt_time": None,
+    "model_failed": False,  # Track if model initialization failed
+    "model_initializing": False,  # Track if model is currently initializing
+}
 
 # OpenRouter configuration
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -516,7 +366,7 @@ def compare_models(
     logger.info(f"Starting model comparison - Models: {model_a_id} vs {model_b_id}")
     logger.info(f"Question: '{question}'")
     logger.info(f"Use retrieval: {use_retrieval}, Page: {page_num}")
-    log_system_stats()
+    check_high_gpu_usage()
 
     if not pdf_file:
         error_msg = "Please upload a PDF file"
@@ -577,10 +427,10 @@ def compare_models(
                 retrieval_display_text = "*No relevant pages found for this query. Using current page instead.*"
             else:
                 # Use the most relevant page (first result)
-                img_bytes, score = relevant_pages[0]
+                img_bytes, score, page_num = relevant_pages[0]
                 img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                status_msg = f"Using most relevant page (similarity: {score:.3f})"
-                logger.info(f"Using retrieved page with similarity score: {score:.4f}")
+                status_msg = f"Using most relevant page {page_num} (similarity: {score:.3f})"
+                logger.info(f"Using retrieved page {page_num} with similarity score: {score:.4f}")
 
         else:
             # Use current page display
@@ -611,7 +461,19 @@ def compare_models(
         logger.info(f"Total comparison time: {total_time:.2f}s")
         logger.info(f"Model A response length: {len(response_a)} chars")
         logger.info(f"Model B response length: {len(response_b)} chars")
-        log_system_stats()
+
+        # Create timing displays
+        timing_a_html = f"""
+        <div style='background: #e3f2fd; padding: 8px; border-radius: 4px; margin-top: 8px; text-align: center;'>
+            ⏱️ Response time: <strong>{model_a_time:.2f}s</strong> | Length: {len(response_a)} chars
+        </div>
+        """
+        
+        timing_b_html = f"""
+        <div style='background: #e8f5e8; padding: 8px; border-radius: 4px; margin-top: 8px; text-align: center;'>
+            ⏱️ Response time: <strong>{model_b_time:.2f}s</strong> | Length: {len(response_b)} chars
+        </div>
+        """
 
         # Check if responses contain errors
         if "Error:" in response_a or "Error:" in response_b:
@@ -622,6 +484,8 @@ def compare_models(
                 status_msg,
                 True,
                 retrieval_display_text,
+                timing_a_html,
+                timing_b_html,
             )  # Show status on error
 
         # Success - show status with page info
@@ -631,16 +495,25 @@ def compare_models(
             status_msg,
             True,
             retrieval_display_text,
+            timing_a_html,
+            timing_b_html,
         )  # Show status for page info
 
     except Exception as e:
         error_msg = f"Error during comparison: {str(e)}"
+        error_timing = f"""
+        <div style='background: #ffebee; padding: 8px; border-radius: 4px; margin-top: 8px; text-align: center; color: #c62828;'>
+            ❌ Error occurred during processing
+        </div>
+        """
         return (
             error_msg,
             error_msg,
             error_msg,
             True,
             "*Error during comparison*",
+            error_timing,
+            error_timing,
         )  # Show status on error
 
 
@@ -715,10 +588,10 @@ def get_pdf_info_and_preview(pdf_file):
 
 def initialize_retrieval_model(model_name, progress=gr.Progress()):
     """Initialize the multimodal retrieval model"""
-    global current_retriever
+    global current_retriever, indexing_state
 
     logger.info(f"Starting retrieval model initialization: {model_name}")
-    log_detailed_gpu_stats("model_initialization_start")
+    check_high_gpu_usage()
 
     if not RETRIEVAL_AVAILABLE:
         logger.error("Retrieval system not available")
@@ -729,6 +602,12 @@ def initialize_retrieval_model(model_name, progress=gr.Progress()):
 
     if not model_name or model_name == "None":
         current_retriever = None
+        # Reset indexing state when no model is selected
+        indexing_state["status"] = "not_started"
+        indexing_state["last_error"] = None
+        indexing_state["last_attempt_time"] = None
+        indexing_state["model_failed"] = False
+        indexing_state["model_initializing"] = False
         logger.info("No retrieval model selected - using page display fallback")
         return (
             "No retrieval model selected - page display will be used instead",
@@ -736,17 +615,12 @@ def initialize_retrieval_model(model_name, progress=gr.Progress()):
         )  # show page selection
 
     try:
+        # Mark model as initializing
+        indexing_state["model_initializing"] = True
+
         start_time = time.time()
         progress(0.1, desc="Creating retriever...")
         logger.info(f"Creating retriever for model: {model_name}")
-
-        # Check GPU safety before attempting to load model
-        gpu_safe, gpu_status = check_gpu_safety()
-        if not gpu_safe:
-            logger.warning(f"GPU not safe for use: {gpu_status}")
-            logger.info("🔄 Switching to CPU mode for safety")
-            force_cpu_mode()
-            progress(0.2, desc="GPU unsafe, switching to CPU mode...")
 
         current_retriever = create_retriever(model_name)
 
@@ -759,16 +633,13 @@ def initialize_retrieval_model(model_name, progress=gr.Progress()):
 
         progress(0.3, desc="Initializing model...")
         logger.info("Initializing retrieval model...")
-        log_detailed_gpu_stats("model_initialization_before_load")
 
         def progress_callback(message, status):
             logger.info(f"Model initialization - {status}: {message}")
             if status == "downloading":
                 progress(0.5, desc=message)
-                log_detailed_gpu_stats("model_downloading")
             elif status == "ready":
                 progress(0.8, desc=message)
-                log_detailed_gpu_stats("model_ready")
             elif status == "error":
                 progress(1.0, desc=f"Error: {message}")
             elif status == "oom_fallback":
@@ -780,11 +651,18 @@ def initialize_retrieval_model(model_name, progress=gr.Progress()):
         logger.info(
             f"Model initialization completed in {initialization_time:.2f} seconds"
         )
-        log_detailed_gpu_stats("model_initialization_complete")
+        check_high_gpu_usage()
 
         if success:
             progress(1.0, desc="Model ready for indexing!")
             logger.info("Retrieval model initialized successfully")
+
+            # Reset indexing state when new model is successfully initialized
+            indexing_state["status"] = "not_started"
+            indexing_state["last_error"] = None
+            indexing_state["last_attempt_time"] = None
+            indexing_state["model_failed"] = False
+            indexing_state["model_initializing"] = False
 
             # Check if we ended up on CPU due to GPU issues
             status = current_retriever.get_status()
@@ -801,38 +679,31 @@ def initialize_retrieval_model(model_name, progress=gr.Progress()):
                 )
         else:
             current_retriever = None
+            # Reset indexing state on model initialization failure
+            indexing_state["status"] = "not_started"
+            indexing_state["last_error"] = "Model initialization failed"
+            indexing_state["last_attempt_time"] = time.time()
+            indexing_state["model_failed"] = True
+            indexing_state["model_initializing"] = False
             logger.error("Model initialization failed")
-            return "Error initializing model", True  # error
+            return "Error initializing model - likely GPU out of memory", True  # error
 
     except Exception as e:
         current_retriever = None
+        # Reset indexing state on exception
+        indexing_state["status"] = "not_started"
+        indexing_state["last_error"] = f"Model initialization exception: {str(e)}"
+        indexing_state["last_attempt_time"] = time.time()
+        indexing_state["model_failed"] = True
+        indexing_state["model_initializing"] = False
         logger.error(f"Exception during model initialization: {e}", exc_info=True)
-        log_detailed_gpu_stats("model_initialization_error")
 
-        # Check if this was an OOM error and offer to retry on CPU
-        error_str = str(e).lower()
-        if any(
-            oom_indicator in error_str
-            for oom_indicator in ["out of memory", "cuda out of memory", "oom"]
-        ):
-            logger.info(
-                "🔄 OOM detected during initialization, attempting CPU fallback"
+        # Check if it's a GPU OOM error
+        if "out of memory" in str(e).lower():
+            return (
+                "Error: GPU out of memory - try using a smaller model (ColPali instead of ColQwen2)",
+                True,
             )
-            try:
-                force_cpu_mode()
-                progress(0.5, desc="GPU OOM detected, retrying on CPU...")
-                current_retriever = create_retriever(model_name)
-                if current_retriever:
-                    success = current_retriever.initialize_model(progress_callback)
-                    if success:
-                        logger.info("✅ Successfully recovered using CPU fallback")
-                        return (
-                            "Model initialized successfully on CPU (GPU OOM recovery). Upload a PDF to start indexing.",
-                            False,
-                        )
-            except Exception as cpu_error:
-                logger.error(f"CPU fallback also failed: {cpu_error}")
-
         return f"Error: {str(e)}", True  # error
 
 
@@ -841,7 +712,7 @@ def process_pdf_for_retrieval(pdf_file, progress=gr.Progress()):
     global current_retriever
 
     logger.info("Starting PDF processing for retrieval")
-    log_detailed_gpu_stats("pdf_indexing_start")
+    check_high_gpu_usage()
 
     if not current_retriever:
         logger.info("No retriever available, falling back to regular preview")
@@ -865,7 +736,11 @@ def process_pdf_for_retrieval(pdf_file, progress=gr.Progress()):
         pdf_size_mb = len(pdf_data) / (1024 * 1024)
         logger.info(f"PDF size: {pdf_size_mb:.2f} MB")
 
+        # Track if an error occurred during indexing
+        indexing_error = None
+
         def progress_callback(message, status):
+            nonlocal indexing_error
             logger.info(f"PDF processing - {status}: {message}")
             if status == "indexing":
                 progress(0.3, desc=message)
@@ -873,6 +748,7 @@ def process_pdf_for_retrieval(pdf_file, progress=gr.Progress()):
                 progress(1.0, desc=message)
             elif status == "error":
                 progress(1.0, desc=f"Error: {message}")
+                indexing_error = message
 
         # Index the PDF
         logger.info("Starting PDF indexing...")
@@ -883,10 +759,25 @@ def process_pdf_for_retrieval(pdf_file, progress=gr.Progress()):
 
         indexing_time = time.time() - start_time
         pure_indexing_time = time.time() - indexing_start_time
+
+        # Check if there was an error during indexing
+        if indexing_error:
+            error_msg = f"PDF indexing failed: {indexing_error}"
+            logger.error(error_msg)
+            check_high_gpu_usage()
+            return f"Error: {error_msg}", None
+
+        # If indexing failed but no specific error was captured
+        if not success:
+            error_msg = "PDF indexing failed - check GPU memory availability"
+            logger.error(error_msg)
+            check_high_gpu_usage()
+            return f"Error: {error_msg}", None
+
         logger.info(
             f"PDF indexing completed in {indexing_time:.2f} seconds (pure indexing: {pure_indexing_time:.2f}s)"
         )
-        log_detailed_gpu_stats("pdf_indexing_complete")
+        check_high_gpu_usage()
 
         if success:
             # Get basic PDF info
@@ -924,14 +815,24 @@ def process_pdf_for_retrieval(pdf_file, progress=gr.Progress()):
             pdf_document.close()
             return info_text, pil_image
         else:
-            return "Error indexing PDF", None
+            # If we don't have a specific error message, provide a generic one
+            if not indexing_error:
+                error_msg = f"PDF indexing failed after {pure_indexing_time:.2f}s - check GPU memory availability"
+            else:
+                error_msg = f"PDF indexing failed: {indexing_error}"
+            logger.error(error_msg)
+            check_high_gpu_usage()
+            return f"Error: {error_msg}", None
 
     except Exception as e:
-        return f"Error processing PDF: {str(e)}", None
+        error_msg = f"Exception during PDF processing: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        check_high_gpu_usage()
+        return f"Error: {error_msg}", None
 
 
 def process_pdf_with_status(pdf_file):
-    """Process PDF and return HTML formatted status with timing info"""
+    """Process PDF upload and return basic info without indexing"""
     if not pdf_file:
         return "<i>No PDF uploaded</i>", None, "", False
 
@@ -942,91 +843,294 @@ def process_pdf_with_status(pdf_file):
         else "uploaded.pdf"
     )
 
-    # Process the PDF (this will also handle the indexing if retrieval model is available)
-    start_time = time.time()
-    info_text, preview_image = process_pdf_for_retrieval(pdf_file)
-    total_processing_time = time.time() - start_time
+    # Just get basic PDF info without indexing
+    info_text, preview_image = get_pdf_info_and_preview(pdf_file)
 
-    # Extract indexing time from the info_text if available
-    indexing_time_html = ""
-    show_timing = False
+    # Format the status display
+    status_html = f"<b>📄 {filename}</b><br/>{info_text}"
 
-    if "Indexing completed in" in info_text:
-        # Extract the timing information to display prominently
-        import re
+    return status_html, preview_image, "", False
 
-        timing_match = re.search(r"Indexing completed in ([\d.]+)s", info_text)
-        gpu_match = re.search(r"\(GPU: ([\d.]+)MB/([\d.]+)MB\)", info_text)
 
-        if timing_match:
-            indexing_time = float(timing_match.group(1))
-            show_timing = True
+def index_pdf_manually(pdf_file, progress=gr.Progress()):
+    """Manually trigger PDF indexing for retrieval"""
+    global current_retriever, indexing_state
 
-            # Create prominent timing display
-            if gpu_match:
-                gpu_used = gpu_match.group(1)
-                gpu_total = gpu_match.group(2)
-                gpu_percent = (float(gpu_used) / float(gpu_total)) * 100
+    import time
 
-                indexing_time_html = f"""
-                <div style='background: linear-gradient(90deg, #4CAF50, #45a049); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);'>
-                    <h3 style='margin: 0; font-size: 18px;'>⚡ Indexing Performance</h3>
-                    <div style='font-size: 24px; font-weight: bold; margin: 8px 0;'>{indexing_time:.2f} seconds</div>
-                    <div style='font-size: 14px; opacity: 0.9;'>
-                        GPU Memory: {gpu_used}MB / {gpu_total}MB ({gpu_percent:.1f}%)
-                    </div>
+    if not pdf_file:
+        error_msg = "No PDF uploaded"
+        logger.warning(error_msg)
+        indexing_state["status"] = "failed"
+        indexing_state["last_error"] = error_msg
+        indexing_state["last_attempt_time"] = time.time()
+        return error_msg, gr.update(value="", visible=False), gr.update(visible=False)
+
+    if not current_retriever:
+        error_msg = "Please select a retrieval model first"
+        logger.warning(error_msg)
+        indexing_state["status"] = "failed"
+        indexing_state["last_error"] = error_msg
+        indexing_state["last_attempt_time"] = time.time()
+        return error_msg, gr.update(value="", visible=False), gr.update(visible=False)
+
+    # Check if model is still initializing
+    if indexing_state.get("model_initializing", False):
+        error_msg = "Model is still initializing - please wait"
+        error_html = """
+        <div style='background: #ff9800; padding: 10px; border-radius: 5px; color: white; text-align: center; margin: 5px 0;'>
+            ⏳ Model is still initializing. Please wait for it to complete before indexing.
+        </div>
+        """
+        return (
+            error_msg,
+            gr.update(value=error_html, visible=True),
+            gr.update(visible=True),
+        )
+
+    # Check if the model failed to initialize
+    if indexing_state.get("model_failed", False):
+        error_msg = "Model initialization failed - please try a different model or check GPU memory"
+        error_html = """
+        <div style='background: #f44336; padding: 15px; border-radius: 5px; color: white; margin: 10px 0;'>
+            <h3 style='margin: 0 0 10px 0;'>❌ Model Initialization Failed</h3>
+            <p style='margin: 5px 0;'>The selected model failed to initialize, likely due to GPU memory constraints.</p>
+            <p style='margin: 5px 0;'><strong>Solutions:</strong></p>
+            <ul style='margin: 5px 0 0 20px;'>
+                <li>Select a smaller model</li>
+                <li>Restart the application to free GPU memory</li>
+                <li>Ensure you have sufficient GPU memory (24GB+ recommended)</li>
+            </ul>
+        </div>
+        """
+        return (
+            error_msg,
+            gr.update(value=error_html, visible=True),
+            gr.update(visible=True),
+        )
+
+    logger.info("Manual PDF indexing triggered")
+    indexing_state["status"] = "in_progress"
+    indexing_state["last_error"] = None
+    indexing_state["last_attempt_time"] = time.time()
+
+    try:
+        # Check GPU usage before starting
+        check_high_gpu_usage()
+
+        # Process the PDF for indexing
+        info_text, preview_image = process_pdf_for_retrieval(pdf_file, progress)
+
+        # Check if indexing was successful
+        if "Error" in info_text:
+            # Customize the error message based on the type of error
+            if "GPU out of memory" in info_text or "out of memory" in info_text.lower():
+                error_html = """
+                <div style='background: #f44336; padding: 15px; border-radius: 5px; color: white; margin: 10px 0;'>
+                    <h3 style='margin: 0 0 10px 0;'>❌ GPU Out of Memory Error</h3>
+                    <p style='margin: 5px 0;'>The retrieval model requires more GPU memory than available.</p>
+                    <p style='margin: 5px 0;'><strong>Solutions:</strong></p>
+                    <ul style='margin: 5px 0 0 20px;'>
+                        <li>Use a smaller retrieval model</li>
+                        <li>Ensure you have sufficient GPU memory (24GB+ recommended)</li>
+                    </ul>
                 </div>
                 """
             else:
-                indexing_time_html = f"""
-                <div style='background: linear-gradient(90deg, #4CAF50, #45a049); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);'>
-                    <h3 style='margin: 0; font-size: 18px;'>⚡ Indexing Performance</h3>
-                    <div style='font-size: 24px; font-weight: bold; margin: 8px 0;'>{indexing_time:.2f} seconds</div>
+                error_html = f"""
+                <div style='background: #f44336; padding: 10px; border-radius: 5px; color: white; text-align: center; margin: 5px 0;'>
+                    ❌ Indexing Failed: {info_text}
                 </div>
                 """
-    elif current_retriever is None:
-        # No indexing performed (no retrieval model)
-        indexing_time_html = f"""
-        <div style='background: linear-gradient(90deg, #2196F3, #1976D2); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);'>
-            <h3 style='margin: 0; font-size: 18px;'>📄 PDF Processing</h3>
-            <div style='font-size: 24px; font-weight: bold; margin: 8px 0;'>{total_processing_time:.2f} seconds</div>
-            <div style='font-size: 14px; opacity: 0.9;'>No indexing - page display mode</div>
-        </div>
-        """
-        show_timing = True
-    elif "Error" in info_text:
-        # Error during indexing
-        indexing_time_html = """
-        <div style='background: linear-gradient(90deg, #f44336, #d32f2f); padding: 15px; border-radius: 10px; margin: 10px 0; color: white; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);'>
-            <h3 style='margin: 0; font-size: 18px;'>❌ Indexing Error</h3>
-            <div style='font-size: 14px; opacity: 0.9;'>Check logs for details</div>
-        </div>
-        """
-        show_timing = True
+            logger.error(f"PDF indexing failed: {info_text}")
+            indexing_state["status"] = "failed"
+            indexing_state["last_error"] = info_text
+            return (
+                info_text,
+                gr.update(value=error_html, visible=True),
+                gr.update(visible=True),
+            )
 
-    # Format file status as HTML
-    if "Error" in info_text:
-        html_status = f"<span style='color: red;'>📄 {filename} - {info_text}</span>"
+        # Check for successful indexing completion
+        if "PDF indexed successfully" in info_text:
+            import re
+
+            # Extract timing info for display
+            timing_match = re.search(r"in ([\d.]+)s", info_text)
+            if timing_match:
+                indexing_time = float(timing_match.group(1))
+
+                # Check if timing is suspiciously low (indicates failure)
+                if indexing_time < 0.1:
+                    error_msg = "Indexing completed too quickly - likely failed silently (possibly GPU OOM)"
+                    error_html = f"""
+                    <div style='background: #ff9800; padding: 10px; border-radius: 5px; color: white; text-align: center; margin: 5px 0;'>
+                        ⚠️ Indexing may have failed: {error_msg}
+                    </div>
+                    """
+                    logger.error(error_msg)
+                    indexing_state["status"] = "failed"
+                    indexing_state["last_error"] = error_msg
+                    return (
+                        error_msg,
+                        gr.update(value=error_html, visible=True),
+                        gr.update(visible=True),
+                    )
+
+                success_html = f"""
+                <div style='background: #4CAF50; padding: 10px; border-radius: 5px; color: white; text-align: center; margin: 5px 0;'>
+                    ✅ PDF Indexed Successfully in {indexing_time:.2f} seconds
+                </div>
+                """
+                logger.info(
+                    f"PDF indexing completed successfully in {indexing_time:.2f}s"
+                )
+                indexing_state["status"] = "success"
+                indexing_state["last_error"] = None
+                return (
+                    "PDF indexing completed successfully",
+                    gr.update(value=success_html, visible=True),
+                    gr.update(visible=True),
+                )
+
+        # Fallback - unclear status
+        warning_msg = "PDF indexing status unclear - check logs for details"
+        warning_html = f"""
+        <div style='background: #ff9800; padding: 10px; border-radius: 5px; color: white; text-align: center; margin: 5px 0;'>
+            ⚠️ {warning_msg}
+        </div>
+        """
+        logger.warning(f"{warning_msg}. Info text: {info_text}")
+        indexing_state["status"] = "failed"
+        indexing_state["last_error"] = warning_msg
+        return (
+            warning_msg,
+            gr.update(value=warning_html, visible=True),
+            gr.update(visible=True),
+        )
+
+    except Exception as e:
+        error_msg = f"Exception during PDF indexing: {str(e)}"
+        error_html = f"""
+        <div style='background: #f44336; padding: 10px; border-radius: 5px; color: white; text-align: center; margin: 5px 0;'>
+            ❌ Indexing Failed: {str(e)}
+        </div>
+        """
+        logger.error(error_msg, exc_info=True)
+        indexing_state["status"] = "failed"
+        indexing_state["last_error"] = error_msg
+        return (
+            error_msg,
+            gr.update(value=error_html, visible=True),
+            gr.update(visible=True),
+        )
+
+
+def get_indexing_status_display():
+    """Get HTML display of current indexing status"""
+    global indexing_state
+    import time
+
+    status = indexing_state["status"]
+    last_error = indexing_state["last_error"]
+    last_attempt = indexing_state["last_attempt_time"]
+
+    if status == "not_started":
+        return """
+        <div style='background: #9E9E9E; padding: 8px; border-radius: 4px; color: white; text-align: center; margin: 5px 0; font-size: 14px;'>
+            📄 No PDF indexed yet
+        </div>
+        """
+    elif status == "in_progress":
+        return """
+        <div style='background: #2196F3; padding: 8px; border-radius: 4px; color: white; text-align: center; margin: 5px 0; font-size: 14px;'>
+            ⏳ Indexing in progress...
+        </div>
+        """
+    elif status == "success":
+        time_ago = ""
+        if last_attempt:
+            minutes_ago = int((time.time() - last_attempt) / 60)
+            if minutes_ago == 0:
+                time_ago = " (just now)"
+            elif minutes_ago == 1:
+                time_ago = " (1 minute ago)"
+            else:
+                time_ago = f" ({minutes_ago} minutes ago)"
+
+        return f"""
+        <div style='background: #4CAF50; padding: 8px; border-radius: 4px; color: white; text-align: center; margin: 5px 0; font-size: 14px;'>
+            ✅ PDF indexed successfully{time_ago}
+        </div>
+        """
+    elif status == "failed":
+        time_ago = ""
+        if last_attempt:
+            minutes_ago = int((time.time() - last_attempt) / 60)
+            if minutes_ago == 0:
+                time_ago = " (just now)"
+            elif minutes_ago == 1:
+                time_ago = " (1 minute ago)"
+            else:
+                time_ago = f" ({minutes_ago} minutes ago)"
+
+        error_preview = (
+            last_error[:50] + "..."
+            if last_error and len(last_error) > 50
+            else last_error
+        )
+        return f"""
+        <div style='background: #f44336; padding: 8px; border-radius: 4px; color: white; text-align: center; margin: 5px 0; font-size: 14px;'>
+            ❌ Indexing failed{time_ago}<br/>
+            <small>{error_preview or 'Unknown error'}</small>
+        </div>
+        """
     else:
-        html_status = f"<span style='color: green;'>📄 {filename} - {info_text}</span>"
-
-    return html_status, preview_image, indexing_time_html, show_timing
+        return """
+        <div style='background: #FF9800; padding: 8px; border-radius: 4px; color: white; text-align: center; margin: 5px 0; font-size: 14px;'>
+            ⚠️ Unknown indexing status
+        </div>
+        """
 
 
 def retrieve_relevant_pages(query, k=3):
     """Retrieve relevant pages using multimodal search"""
-    global current_retriever
+    global current_retriever, indexing_state
 
     logger.info(f"Starting page retrieval - Query: '{query}', k={k}")
-    log_detailed_gpu_stats("retrieval_start")
+    check_high_gpu_usage()
 
     if not current_retriever or not query.strip():
         logger.warning("No retriever available or empty query")
         return [], ""
 
+    # Check if indexing is in a failed state
+    if indexing_state["status"] == "failed":
+        error_msg = (
+            "⚠️ **Indexing Failed** - Cannot retrieve pages because PDF indexing failed."
+        )
+        if indexing_state["last_error"]:
+            error_msg += f"\n\n**Last Error:** {indexing_state['last_error']}"
+        error_msg += "\n\n*Please re-index the PDF before attempting to query.*"
+        logger.warning(
+            f"Retrieval blocked due to failed indexing state: {indexing_state['last_error']}"
+        )
+        return [], error_msg
+
+    # Check if indexing hasn't been attempted yet
+    if indexing_state["status"] == "not_started":
+        warning_msg = "⚠️ **No PDF Indexed** - Please upload and index a PDF before attempting to retrieve pages."
+        logger.warning("Retrieval attempted without any PDF being indexed")
+        return [], warning_msg
+
+    # Check if indexing is currently in progress
+    if indexing_state["status"] == "in_progress":
+        warning_msg = "⚠️ **Indexing In Progress** - Please wait for PDF indexing to complete before querying."
+        logger.warning("Retrieval attempted while indexing is still in progress")
+        return [], warning_msg
+
     try:
         start_time = time.time()
-        log_detailed_gpu_stats("retrieval_before_search")
         results = current_retriever.search(query, k=k)
         retrieval_time = time.time() - start_time
 
@@ -1038,25 +1142,21 @@ def retrieve_relevant_pages(query, k=3):
             formatted_results = "*No relevant pages found for this query.*"
         else:
             formatted_results = f"**Found {len(results)} relevant page(s) in {retrieval_time:.2f}s:**\n\n"
-            for i, (img_bytes, score) in enumerate(results):
-                # Try to determine page number if possible
-                # Note: This is a simplified approach - in practice you'd want to store page metadata
-                page_info = f"Page {i+1}"  # Placeholder - actual page numbers would need to be tracked during indexing
+            for i, (img_bytes, score, page_num) in enumerate(results):
                 formatted_results += (
-                    f"**{i+1}.** {page_info} - Similarity: {score:.3f}\n"
+                    f"**{i+1}.** Page {page_num} - Similarity: {score:.3f}\n"
                 )
 
         # Log detailed results
-        for i, (img_bytes, score) in enumerate(results):
+        for i, (img_bytes, score, page_num) in enumerate(results):
             logger.info(
-                f"Result {i+1}: Similarity score {score:.4f}, Image size: {len(img_bytes)} bytes"
+                f"Result {i+1}: Page {page_num}, Similarity score {score:.4f}, Image size: {len(img_bytes)} bytes"
             )
 
-        log_detailed_gpu_stats("retrieval_complete")
+        check_high_gpu_usage()
         return results, formatted_results
     except Exception as e:
         logger.error(f"Error during retrieval: {e}", exc_info=True)
-        log_detailed_gpu_stats("retrieval_error")
         return [], f"*Error during retrieval: {str(e)}*"
 
 
@@ -1128,13 +1228,25 @@ with gr.Blocks(
 ) as demo:
     gr.Markdown("# 🤖 Vision Language Model Comparison Tool")
     gr.Markdown(
-        "Select any VLM available on OpenRouter, upload a PDF, and compare responses."
+        "Upload a PDF, choose an indexing model, select response generation models, and submit your query."
     )
 
     with gr.Row():
         with gr.Column(scale=1):
-            # Multimodal Retrieval Model Section
-            gr.Markdown("## 1. Select multimodal retrieval model")
+            # PDF Upload and Processing Section - MOVED TO #1
+            gr.Markdown("## 1. PDF upload & processing")
+            pdf_input = gr.File(
+                label="📄 Upload PDF",
+                file_types=[".pdf"],
+                type="binary",
+                container=False,
+            )
+
+            # Filename display (will be updated with actual filename when uploaded)
+            pdf_status = gr.HTML(value="<i>No PDF uploaded</i>")
+
+            # Multimodal Retrieval Model Section - MOVED TO #2
+            gr.Markdown("## 2. Select multimodal retrieval model")
             retrieval_model_dropdown = gr.Dropdown(
                 choices=["None"]
                 + (MultimodalRetriever.SUPPORTED_MODELS if RETRIEVAL_AVAILABLE else []),
@@ -1151,8 +1263,23 @@ with gr.Blocks(
                 visible=False,
             )
 
-            # Response Generation Models Section
-            gr.Markdown("## 2. Select response generation model")
+            # Index PDF Button - NEW #3
+            gr.Markdown("## 3. Index PDF for retrieval")
+            index_pdf_btn = gr.Button(
+                "🔍 Index PDF", variant="secondary", size="lg", interactive=False
+            )
+            gr.Markdown(
+                "💡 **Tip:** If you do not want to index the PDF, you must select the specific page in the PDF to send to the models",
+                elem_classes=["tooltip-text"],
+            )
+
+            # Indexing time display (prominent display for performance monitoring)
+            indexing_time_display = gr.HTML(
+                value="", visible=False, label="Indexing Performance"
+            )
+
+            # Response Generation Models Section - MOVED TO #4
+            gr.Markdown("## 4. Select response generation models")
 
             with gr.Row():
                 with gr.Column(scale=1):
@@ -1195,32 +1322,16 @@ with gr.Blocks(
                         filterable=True,
                     )
 
-            # PDF Upload and Processing Section
-            gr.Markdown("## 3. PDF upload & processing")
-            pdf_input = gr.File(
-                label="📄 Upload PDF",
-                file_types=[".pdf"],
-                type="binary",
-                container=False,
-            )
-
-            # Filename display (will be updated with actual filename when uploaded)
-            pdf_status = gr.HTML(value="<i>No PDF uploaded</i>")
-
-            # Indexing time display (prominent display for performance monitoring)
-            indexing_time_display = gr.HTML(
-                value="", visible=False, label="Indexing Performance"
-            )
-
-            gr.Markdown("## 4. Send query")
+            gr.Markdown("## 5. Submit query")
 
             question_input = gr.Textbox(
                 label="Enter Query",
                 placeholder="Ask a question about this PDF...",
                 lines=3,
+                show_label=False,
             )
 
-            compare_btn = gr.Button("⚡ Compare Models", variant="primary", size="lg")
+            compare_btn = gr.Button("⚡ Submit Query", variant="primary", size="lg")
 
         with gr.Column(scale=1):
             # PDF Preview Section - Now gets full right column
@@ -1254,6 +1365,22 @@ with gr.Blocks(
                 elem_classes=["retrieval-results"],
             )
 
+            # Comparison Results Section - MOVED HERE
+            gr.Markdown("## 📊 Comparison Results")
+            gr.Markdown("### 🤖 Model A Response")
+            with gr.Group():
+                response_a = gr.Markdown(
+                    value="Model A response will appear here...", height=400
+                )
+                timing_a = gr.HTML(value="", visible=False, label="Model A Timing")
+
+            gr.Markdown("### 🤖 Model B Response")
+            with gr.Group():
+                response_b = gr.Markdown(
+                    value="Model B response will appear here...", height=400
+                )
+                timing_b = gr.HTML(value="", visible=False, label="Model B Timing")
+
     # Function to clear retrieval results when switching modes
     def clear_retrieval_results():
         return "*No retrieval model selected - page display mode active*"
@@ -1261,23 +1388,6 @@ with gr.Blocks(
     # Function to reset displays when no PDF
     def reset_displays_on_empty():
         return "<i>No PDF uploaded</i>", None, "", False
-
-    # Results Section
-    gr.Markdown("## 📊 Comparison Results")
-    with gr.Row():
-        with gr.Column(scale=1):
-            gr.Markdown("### 🤖 Model A Response")
-            with gr.Group():
-                response_a = gr.Markdown(
-                    value="Model A response will appear here...", height=400
-                )
-
-        with gr.Column(scale=1):
-            gr.Markdown("### 🤖 Model B Response")
-            with gr.Group():
-                response_b = gr.Markdown(
-                    value="Model B response will appear here...", height=400
-                )
 
     # Helper function to refresh models
     def refresh_models():
@@ -1344,13 +1454,13 @@ with gr.Blocks(
         # Determine if we should use retrieval based on current_retriever state
         use_retrieval = current_retriever is not None
 
-        response_a, response_b, status_msg, show_status, retrieval_results = (
+        response_a, response_b, status_msg, show_status, retrieval_results, timing_a, timing_b = (
             compare_models(
                 pdf_file, page_num, question, model_a_id, model_b_id, use_retrieval
             )
         )
 
-        return (response_a, response_b, retrieval_results)
+        return (response_a, response_b, retrieval_results, timing_a, timing_b)
 
     # Event handlers
     pdf_input.change(
@@ -1362,6 +1472,41 @@ with gr.Blocks(
             indexing_time_display,
             indexing_time_display,
         ],  # Last one controls visibility
+    )
+
+    # Enable/disable Index PDF button when retrieval model or PDF changes
+    def update_index_button_state(pdf_file, retrieval_model):
+        # Check if model is initializing or failed
+        if indexing_state.get("model_initializing", False):
+            return gr.Button(value="⏳ Model Initializing...", interactive=False)
+        elif indexing_state.get("model_failed", False):
+            return gr.Button(value="❌ Model Failed", interactive=False)
+        elif pdf_file and retrieval_model and retrieval_model != "None":
+            return gr.Button(value="🔍 Index PDF", interactive=True)
+        else:
+            return gr.Button(value="🔍 Index PDF", interactive=False)
+
+    pdf_input.change(
+        fn=update_index_button_state,
+        inputs=[pdf_input, retrieval_model_dropdown],
+        outputs=[index_pdf_btn],
+    )
+
+    retrieval_model_dropdown.change(
+        fn=update_index_button_state,
+        inputs=[pdf_input, retrieval_model_dropdown],
+        outputs=[index_pdf_btn],
+    )
+
+    # Index PDF button handler
+    index_pdf_btn.click(
+        fn=index_pdf_manually,
+        inputs=[pdf_input],
+        outputs=[
+            retrieval_status,
+            indexing_time_display,
+            indexing_time_display,  # Controls visibility
+        ],
     )
 
     # PDF page preview when page display changes
@@ -1408,6 +1553,10 @@ with gr.Blocks(
             retrieval_status,
             retrieval_status,  # Controls visibility of retrieval_status
         ],
+    ).then(
+        fn=update_index_button_state,
+        inputs=[pdf_input, retrieval_model_dropdown],
+        outputs=[index_pdf_btn],
     )
 
     # Clear retrieval results when changing retrieval model
@@ -1432,7 +1581,7 @@ with gr.Blocks(
             model_a_dropdown,
             model_b_dropdown,
         ],
-        outputs=[response_a, response_b, retrieval_results_display],
+        outputs=[response_a, response_b, retrieval_results_display, timing_a, timing_b],
     )
 
     # Allow Enter key to trigger comparison
@@ -1445,13 +1594,13 @@ with gr.Blocks(
             model_a_dropdown,
             model_b_dropdown,
         ],
-        outputs=[response_a, response_b, retrieval_results_display],
+        outputs=[response_a, response_b, retrieval_results_display, timing_a, timing_b],
     )
 
 if __name__ == "__main__":
     logger.info("=== VLM COMPARISON TOOL STARTUP ===")
     logger.info(f"Log file: {log_filename}")
-    log_detailed_gpu_stats("application_startup")
+    check_high_gpu_usage()
     logger.info("Starting Gradio application...")
 
     demo.launch(

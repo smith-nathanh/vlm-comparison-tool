@@ -50,7 +50,7 @@ For PDF indexing and intelligent page retrieval:
 
 - Python 3.8+
 - OpenRouter API key
-- CUDA-compatible GPU (for fast PDF indexing)
+- CUDA-compatible GPU (required for PDF indexing)
 
 ## Installation
 
@@ -160,6 +160,30 @@ demo.launch(
 - **Timeout**: 60 seconds per model query
 - **Pricing**: Varies by model (displayed in the interface)
 
+## Cloud Deployment
+
+### Deploy with SkyPilot
+
+For GPU deployment on cloud infrastructure:
+
+1. Launch the application on a cloud GPU instance:
+```bash
+sky launch -c vlm-compare skypilot/H100/config.yaml
+```
+
+2. Once the cluster is running, set up port forwarding to access the web interface:
+```bash
+sky ssh vlm-compare -L 7860:localhost:7860
+```
+
+3. Access the application in your browser at `http://localhost:7860`
+
+Note: The SkyPilot configuration automatically:
+- Provisions an H100 GPU instance on GCP
+- Installs all dependencies including CUDA 12.1
+- Exposes ports 7860 (Gradio) and 8888 (Jupyter, optional)
+- Runs the application with `uv run app.py`
+
 ## Troubleshooting
 
 ### "No VLM models available - check API key"
@@ -174,7 +198,7 @@ demo.launch(
 
 ### Retrieval System Issues
 - **"Retrieval model not loading"**: Check GPU memory availability, try restarting
-- **"Out of GPU memory"**: Try a smaller PDF or use CPU mode (set in environment)
+- **"Out of GPU memory"**: Use a smaller retrieval model (ColPali instead of ColQwen2) or ensure sufficient GPU memory (24GB+ recommended for ColQwen2)
 - **"Indexing failed"**: Check logs for detailed error messages, ensure PDF is valid
 - **"No relevant pages found"**: Try rephrasing your question or use single-page mode
 
