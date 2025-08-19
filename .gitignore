@@ -2,4 +2,5 @@ logs/
 .env
 
 byaldi/
-__pycache__/*
+__pycache__/
+archive/
