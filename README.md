@@ -1,6 +1,6 @@
 # VLM Comparison Tool
 
-A web application for comparing Vision Language Models (VLMs) on PDF documents using OpenRouter's API. Upload a PDF, ask questions, and compare responses from different VLMs side-by-side.
+A web application for comparing Vision Language Models (VLMs) on PDF documents using [OpenRouter](https://openrouter.ai/)'s API. Upload a PDF, ask questions, and compare responses from different VLMs side-by-side.
 
 ## Features
 
@@ -30,20 +30,20 @@ The tool features an advanced multimodal retrieval system that can intelligently
 
 ## Supported Models
 
-### Vision Language Models (VLMs)
-
-The tool automatically fetches all vision-capable models from OpenRouter, including:
-- GPT-4 Vision models (OpenAI)
-- Claude 3 models with vision (Anthropic)
-- Gemini Pro Vision (Google)
-- Qwen-VL models
-- And many more as they become available
-
 ### Multimodal Retrieval Models
 
 For PDF indexing and intelligent page retrieval:
 - **vidore/colqwen2-v1.0** - Latest Qwen2-VL based retrieval model
 - **vidore/colpali-v1.3** - Advanced ColPali document understanding model
+
+### Vision Language Models (VLMs)
+
+The tool automatically fetches all vision-capable models from [OpenRouter](https://openrouter.ai/models), including:
+- GPT-4 Vision models (OpenAI)
+- Claude 3 models with vision (Anthropic)
+- Gemini Pro Vision (Google)
+- Qwen-VL models
+- And many more
 
 ## Prerequisites
 
