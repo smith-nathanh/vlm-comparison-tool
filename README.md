@@ -27,6 +27,12 @@ The tool features an advanced multimodal retrieval system that can intelligently
 3. **Intelligent Page Selection**: Instead of manually browsing pages, ask questions and the system finds the most relevant pages automatically
 4. **Contextual Retrieval**: Get answers that span multiple pages when relevant information is distributed across the document
 
+### Screenshot
+
+An illustrative example is below. We uploaded a 372 page PDF of a [JPM yearly report](https://www.jpmorganchase.com/content/dam/jpmc/jpmorgan-chase-and-co/investor-relations/documents/annualreport-2024.pdf), which took 155 seconds to index on an Nvidia H100 GPU. We then selected two models and prompted with "What was the total revenue for the wealth management division in 2024?". It took 0.06 seconds to retrieve the top three most relevant pages and then it passed those images to the VLMs through the OpenRouter API for them to generate their response. Both models correctly answered from page 106 with $21,578mm. 
+
+![Screenshot of VLM Comparison Tool](assets/screenshot.png)
+
 
 ## Supported Models
 
