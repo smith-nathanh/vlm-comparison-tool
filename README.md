@@ -37,7 +37,6 @@ The tool automatically fetches all vision-capable models from OpenRouter, includ
 - Claude 3 models with vision (Anthropic)
 - Gemini Pro Vision (Google)
 - Qwen-VL models
-- LLaVA variants
 - And many more as they become available
 
 ### Multimodal Retrieval Models
@@ -173,7 +172,7 @@ sky launch -c vlm-compare skypilot/H100/config.yaml
 
 2. Once the cluster is running, set up port forwarding to access the web interface:
 ```bash
-sky ssh vlm-compare -L 7860:localhost:7860
+ssh vlm-compare -L 7860:localhost:7860
 ```
 
 3. Access the application in your browser at `http://localhost:7860`
@@ -198,7 +197,7 @@ Note: The SkyPilot configuration automatically:
 
 ### Retrieval System Issues
 - **"Retrieval model not loading"**: Check GPU memory availability, try restarting
-- **"Out of GPU memory"**: Use a smaller retrieval model (ColPali instead of ColQwen2) or ensure sufficient GPU memory (24GB+ recommended for ColQwen2)
+- **"Out of GPU memory"**: Use a smaller retrieval model (ColPali instead of ColQwen2) or ensure sufficient GPU memory (24GB+ recommended)
 - **"Indexing failed"**: Check logs for detailed error messages, ensure PDF is valid
 - **"No relevant pages found"**: Try rephrasing your question or use single-page mode
 

@@ -4,9 +4,6 @@ resources:
   memory: 32+
   disk_size: 256
   use_spot: true
-  # Expose ports for web app access
-  ports: 
-    - 7860  # Gradio default port for VLM comparison tool
   any_of:
     - region: us-east4
     - region: us-central1
@@ -14,14 +11,14 @@ resources:
     - region: us-west1
     - region: us-west4
 
-  # Add port forwarding for the web app
+  # Expose ports for web app access
   ports: 
-    - 7860  # Gradio default port
+    - 7860  # Gradio default port for VLM comparison tool
     - 8888  # Jupyter (optional)
 
 
-# file_mounts:
-#   ~/sky_workdir/.env: ./.env
+file_mounts:
+  ~/sky_workdir/.env: ./.env
 #   ~/.gitconfig: ~/.gitconfig
 
 #   # MOUNT mode for datasets
@@ -52,7 +49,8 @@ setup: |
       libbz2-dev \
       libreadline-dev \
       libsqlite3-dev \
-      openssh-server
+      openssh-server \
+      poppler-utils
 
   # Install CUDA 12.1 toolkit (compatible with PyTorch)
   wget https://developer.download.nvidia.com/compute/cuda/12.1.1/local_installers/cuda_12.1.1_530.30.02_linux.run
@@ -78,11 +76,8 @@ setup: |
   source .venv/bin/activate
 
   # ========== Install VLM Comparison Tool Dependencies ==========
-  # Install main project dependencies
-  uv pip install -e .
-  
-  # Install additional dependencies for multimodal retrieval
-  uv pip install byaldi python-dotenv psutil pynvml
+  # Install dependencies using lock file for consistency
+  uv sync
 
   # Install ninja separately and ensure it's in PATH
   uv pip install ninja
@@ -208,6 +203,22 @@ setup: |
 run: |
   echo "Starting VLM Comparison Tool..."
   cd ~/sky_workdir
-  source .env
+  
+  # Load environment variables
+  if [ -f .env ]; then
+    source .env
+    echo "Environment variables loaded from .env"
+  else
+    echo "WARNING: .env file not found!"
+  fi
+  
+  # Verify API key is set
+  if [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "ERROR: OPENROUTER_API_KEY not set. Please ensure .env file contains OPENROUTER_API_KEY=your_key"
+    exit 1
+  else
+    echo "OPENROUTER_API_KEY is set"
+  fi
+  
   source .venv/bin/activate
   uv run app.py
