@@ -5,7 +5,7 @@ A web application for comparing Vision Language Models (VLMs) on PDF documents u
 ## Features
 
 - **Model Selection**: Choose from any vision-capable models available on OpenRouter
-- **Advanced Filtering**: Filter models by provider, context length, and pricing
+- **Advanced Filtering**: Filter models by provider and see their different options and pricing
 - **PDF Processing**: Upload PDFs and browse pages with real-time preview
 - **Multimodal PDF Indexing**: Index entire PDFs using state-of-the-art multimodal retrieval models
 - **Intelligent Page Retrieval**: Automatically find the most relevant pages based on your questions
