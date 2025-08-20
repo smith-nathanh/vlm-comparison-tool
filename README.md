@@ -75,13 +75,20 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 3. Install dependencies:
+
+Using uv (recommended):
 ```bash
 uv sync
 ```
 
-Alternatively, install with pip (including retrieval dependencies):
+Using pip with pyproject.toml:
 ```bash
-pip install gradio pymupdf pillow requests torch transformers byaldi
+pip install -e .
+```
+
+Or install dependencies manually:
+```bash
+pip install gradio pymupdf pillow requests torch transformers byaldi psutil python-dotenv gputil
 ```
 
 4. Set up your OpenRouter API key:
@@ -115,10 +122,9 @@ python app.py
 
 ### PDF Indexing Tips
 
-- **First Use**: Allow extra time for model downloads (5-10 minutes on first run)
+- **First Use**: Allow extra time for model downloads onto your system (30 seconds to a minute)
 - **GPU Memory**: Monitor GPU usage in logs - the system will warn about memory issues
 - **Large PDFs**: Indexing time scales with document size; typical research papers index in 30-60 seconds
-- **Model Selection**: ColQwen2-v1.0 is generally faster, ColPali-v1.3 may be more accurate for complex documents
 
 ### Retrieval vs Single Page Mode
 
