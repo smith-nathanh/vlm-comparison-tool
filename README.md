@@ -1,13 +1,15 @@
 # VLM Comparison Tool
 
-A web application for comparing Vision Language Models (VLMs) on PDF documents using [OpenRouter](https://openrouter.ai/)'s API. Upload a PDF, ask questions, and compare responses from different VLMs side-by-side.
+A web application for comparing Vision Language Models (VLMs) on PDF documents using [OpenRouter](https://openrouter.ai/)'s API. Upload a PDF, generate an index with a multimodal embedding model, ask your questions, and compare responses from different VLMs side-by-side. 
+
+This application is primarily useful as a demonstration of how to do information retrieval with multimodal embedding models. After the retrieval step, we generate a final response using your choice of vision language model. The reason we present two models for doing the response generation is simply to help you determine which model you prefer to use - as a "vibe check" on quality and consistency of the responses. Consider this a tool to narrow down your choices of embedding model + response model.  
 
 ## Features
 
 - **Model Selection**: Choose from any vision-capable models available on OpenRouter
 - **Advanced Filtering**: Filter models by provider and see their different options and pricing
 - **PDF Processing**: Upload PDFs and browse pages with real-time preview
-- **Multimodal PDF Indexing**: Index entire PDFs using state-of-the-art multimodal retrieval models
+- **Multimodal PDF Indexing**: Generate embeddings used to index entire PDFs using state-of-the-art multimodal retrieval models
 - **Intelligent Page Retrieval**: Automatically find the most relevant pages based on your questions
 - **Side-by-Side Comparison**: Compare responses from two models simultaneously
 
@@ -17,15 +19,19 @@ The tool features an advanced multimodal retrieval system that can intelligently
 
 ### Supported Retrieval Models
 
-- **ColQwen2-v1.0** (`vidore/colqwen2-v1.0`) - Latest multimodal retrieval model based on Qwen2-VL
-- **ColPali-v1.3** (`vidore/colpali-v1.3`) - Advanced document understanding model for visual and textual content
+The supported models include only those in the [ColVision](https://github.com/illuin-tech/colpali) series: 
+
+- **ColQwen2-v1.0** (`vidore/colqwen2-v1.0`) - Multimodal embedding model based on Qwen2-VL
+- **ColPali-v1.3** (`vidore/colpali-v1.3`) - Multimodal embedding model based on Paligemma
 
 ### How PDF Indexing Works
 
-1. **Upload & Index**: When you upload a PDF, the system can create a multimodal index of all pages
+1. **Upload & Index**: Upload a pdf and index it using one of the multimodal embedding models
 2. **Visual + Text Understanding**: The retrieval models analyze both visual elements (charts, diagrams, layouts) and textual content
 3. **Intelligent Page Selection**: Instead of manually browsing pages, ask questions and the system finds the most relevant pages automatically
 4. **Contextual Retrieval**: Get answers that span multiple pages when relevant information is distributed across the document
+
+By using a model that was trained to associate query-image pairs we can bypass the need for using page layout detection and OCR, effectively making a more simplistic and effective information retrieval pipeline.
 
 ### Screenshot
 
@@ -34,22 +40,20 @@ An illustrative example is below. We uploaded a 372 page PDF of a [JPM yearly re
 ![Screenshot of VLM Comparison Tool](assets/screenshot.png)
 
 
-## Supported Models
-
-### Multimodal Retrieval Models
-
-For PDF indexing and intelligent page retrieval:
-- **vidore/colqwen2-v1.0** - Latest Qwen2-VL based retrieval model
-- **vidore/colpali-v1.3** - Advanced ColPali document understanding model
+## Response Generation
 
 ### Vision Language Models (VLMs)
 
 The tool automatically fetches all vision-capable models from [OpenRouter](https://openrouter.ai/models), including:
 - GPT-4 Vision models (OpenAI)
-- Claude 3 models with vision (Anthropic)
+- Claude models with vision (Anthropic)
+- LLama vision models (Facebook)
 - Gemini Pro Vision (Google)
-- Qwen-VL models
+- Qwen-VL (Alibaba)
 - And many more
+
+Choose from a massive collection of VLMs and compare their responses side-by-side.
+
 
 ## Prerequisites
 
@@ -106,25 +110,6 @@ python app.py
 ```
 
 2. Open your browser to `http://localhost:7860`
-
-3. **Model Selection**:
-   - **Retrieval Models**: Select a multimodal retrieval model (ColQwen2 or ColPali) for PDF indexing
-   - **Response Models**: Use filters to narrow down VLM models by provider, context length, or price
-   - Select Model A and Model B from the filtered list
-   - Click "Refresh" to get the latest available models
-
-4. **PDF Processing**:
-   - Upload a PDF file
-   - **Option 1 - Single Page Mode**: Browse to a specific page you want to analyze
-   - **Option 2 - Retrieval Mode**: Index the entire PDF with the selected retrieval model
-     - First-time indexing may take a few minutes as models are downloaded
-     - Subsequent PDFs will index much faster
-   - Enter your question about the PDF content
-
-5. **Get Results**:
-   - **Single Page**: Models analyze only the selected page
-   - **Retrieval Mode**: System finds the most relevant pages and shows them alongside model responses
-   - Click "Compare Models" to see responses side-by-side
 
 ## Advanced Usage
 
@@ -199,7 +184,6 @@ Note: The SkyPilot configuration automatically:
 ### PDF Processing Errors
 - Ensure your PDF is not corrupted or password-protected
 - Check that the page number exists in the document
-- Try a different PDF file
 
 ### Retrieval System Issues
 - **"Retrieval model not loading"**: Check GPU memory availability, try restarting
@@ -222,7 +206,6 @@ Note: The SkyPilot configuration automatically:
 ### Dependencies
 - **Core**: Gradio, PyMuPDF, Pillow, requests
 - **Retrieval**: torch, transformers, byaldi (for ColPali/ColQwen models)
-- **Optional**: GPUtil, psutil (for system monitoring)
 
 ### Logging & Monitoring
 - Application logs: `logs/app_YYYYMMDD_HHMMSS.log`
